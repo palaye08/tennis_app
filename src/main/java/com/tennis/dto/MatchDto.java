@@ -13,6 +13,7 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 @Builder
 public class MatchDto {
+    // dans le matchDTO
     private Long id;
     private String num;
     private Integer nombreDeSet;
