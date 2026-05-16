@@ -4,10 +4,9 @@ on:
   push:
     branches:
       - master
-    pull-request:
-      - branches:
-          - master
-
+  pull_request:
+    branches:
+      - master
 
 jobs:
   build-and-deploy:
@@ -38,4 +37,4 @@ jobs:
         with:
           context: .
           push: true
-          tags: palaye08/tennis-backend:latest
+          tags: palaye769/tennis-backend:latest
