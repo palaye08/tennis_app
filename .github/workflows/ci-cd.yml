@@ -3,10 +3,12 @@ name: CI/CD Pipeline
 on:
   push:
     branches:
-      - main
-
+      - master
+  pull_request:
+    branches:
+      - master
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
 
     steps:
@@ -34,4 +36,4 @@ jobs:
         with:
           context: .
           push: true
-          tags: palaye08/tennis-backend:latest
+          tags: laye769/tennis-backend:latest
