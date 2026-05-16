@@ -9,7 +9,7 @@ import org.mapstruct.MappingTarget;
 
 @Mapper(componentModel = "spring")
 public interface MatchMapper {
-
+// teste
     MatchDto toDto(Match match);
 
     @Mapping(target = "id", ignore = true)
