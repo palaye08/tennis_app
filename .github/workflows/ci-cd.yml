@@ -3,10 +3,10 @@ name: CI/CD Pipeline
 on:
   push:
     branches:
-      - feature/tennis-crud
+      - master # Changé de 'main' à 'master'
   pull_request:
     branches:
-      - feature/tennis-crud
+      - master # Changé de 'main' à 'master'
 
 jobs:
   build:
@@ -37,4 +37,4 @@ jobs:
         with:
           context: .
           push: true
-          tags: palaye08/tennis-backend:latest
+          tags: laye769/tennis-backend:latest
