@@ -214,3 +214,5 @@ http://localhost:8082/swagger-ui/index.html
 
 > Voir le fichier `.github/workflows/ci-cd.yml` à créer.
 > Pipeline prévu : Push → Build → Test → Docker Build → Push Docker Hub → Deploy
+> 
+> les etapes les plus claire 
