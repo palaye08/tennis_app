@@ -3,10 +3,11 @@ name: CI/CD Pipeline
 on:
   push:
     branches:
-      - master
+      - feature/tennis-crud
   pull_request:
     branches:
-      - master
+      - feature/tennis-crud
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -22,7 +23,7 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: Build and Test with Maven
+      - name: Build with Maven
         run: mvn clean package -DskipTests
 
       - name: Log in to Docker Hub
@@ -31,9 +32,9 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Build and push Docker image
+      - name: Build and Push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          tags: laye769/tennis-backend:latest
+          tags: palaye08/tennis-backend:latest
