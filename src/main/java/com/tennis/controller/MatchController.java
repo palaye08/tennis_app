@@ -22,7 +22,7 @@ public class MatchController {
     public ApiResponse<MatchDto> createMatch(@Valid @RequestBody MatchRequest request) {
         return ApiResponse.success(matchService.createMatch(request));
     }
-
+// je suis dans match-delete
     @GetMapping
     public ApiResponse<Page<MatchDto>> getAllMatches(
             @RequestParam(defaultValue = "0") int page,
