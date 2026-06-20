@@ -1,0 +1,34 @@
+# =============================================================
+# RENOMMEZ CE FICHIER EN : terraform.tfvars
+# Remplissez vos vraies valeurs.
+# ⚠️  NE JAMAIS committer terraform.tfvars dans git (secrets !)
+# =============================================================
+
+# Type d'instance EC2
+# t2.micro = Free Tier en us-west-1 (750h/mois pendant 12 mois)
+instance_type = "t2.micro"
+
+# Image Docker à déployer
+docker_image = "palaye769/tennis-backend:latest"
+
+# Port de l'application Spring Boot
+app_port = 8081
+
+# Nom de la paire de clés SSH (sera visible dans la console AWS)
+key_pair_name = "palaye-tennis-key"
+
+# Chemin vers votre clé publique SSH sur votre machine Linux
+# Si elle n'existe pas : ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa
+public_key_path = "~/.ssh/id_rsa.pub"
+
+# ⚠️  OBLIGATOIRE — Votre IP publique pour SSH
+# Trouvez-la avec : curl ifconfig.me
+# Format : votre_ip/32   (le /32 signifie "uniquement cette IP")
+# Exemple : "54.200.100.45/32"
+ssh_allowed_ip = "VOTRE_IP_PUBLIQUE/32"
+
+# Nom de la base de données MySQL
+mysql_database = "tennis_db"
+
+# ⚠️  OBLIGATOIRE — Mot de passe MySQL (choisissez-en un fort)
+mysql_root_password = "VotreMotDePasseFor!2024"
