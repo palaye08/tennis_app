@@ -1,3 +1,32 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# CI/CD Pipeline — Tennis Backend
+#
+# SÉPARATION DES RESPONSABILITÉS :
+# ┌─────────────────────────────────────────────────────────────────────┐
+# │  TERRAFORM (une seule fois, à la création de l'infra)               │
+# │    → Crée l'instance EC2, le security group, la paire de clés SSH   │
+# │    → user_data.sh.tpl : installe Docker, crée le docker-compose.yml │
+# │      et le service systemd (exécuté UNIQUEMENT au 1er boot EC2)     │
+# ├─────────────────────────────────────────────────────────────────────┤
+# │  CI/CD (à chaque push sur master)                                   │
+# │    → CI : compile Maven → build image Docker → push Docker Hub      │
+# │    → CD : SSH sur EC2 → pull nouvelle image → redémarre backend     │
+# └─────────────────────────────────────────────────────────────────────┘
+#
+# SECRETS GITHUB À CONFIGURER (Settings → Secrets and variables → Actions) :
+#   DOCKER_USERNAME  : votre nom d'utilisateur Docker Hub (ex: palaye769)
+#   DOCKER_PASSWORD  : token d'accès Docker Hub (pas votre mot de passe)
+#   EC2_HOST         : IP publique de l'EC2
+#                      → obtenir avec : terraform output ec2_public_ip
+#   EC2_SSH_KEY      : contenu COMPLET de votre clé privée SSH (~/.ssh/id_rsa)
+#                      → copier-coller tout le fichier (-----BEGIN ... -----)
+#
+# PRÉREQUIS TERRAFORM : Le security group doit autoriser le SSH (port 22)
+#   depuis les IPs de GitHub Actions (dynamiques).
+#   → Solution simple : dans terraform.tfvars, mettre ssh_allowed_ip = "0.0.0.0/0"
+#     puis relancer : terraform apply
+# ══════════════════════════════════════════════════════════════════════════════
+
 name: CI/CD Pipeline
 
 on:
@@ -9,13 +38,28 @@ on:
       - master
 
 jobs:
-  build-and-deploy:
+
+  # ════════════════════════════════════════════════════════════════════
+  # JOB 1 — CI : Intégration Continue
+  #
+  # Déclenché sur : push master ET pull_request vers master
+  # But : compiler le code Java, construire l'image Docker et la pousser
+  #       sur Docker Hub pour qu'elle soit disponible au déploiement
+  # ════════════════════════════════════════════════════════════════════
+  ci:
+    name: "CI — Build & Push Docker Image"
     runs-on: ubuntu-latest
 
     steps:
+
+      # ── Étape 1 : Récupère le code source du dépôt GitHub ──────────
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # ── Étape 2 : Configure Java 17 ─────────────────────────────────
+      # Temurin = distribution OpenJDK open-source maintenue par Eclipse
+      # cache: maven → évite de retélécharger toutes les dépendances Maven
+      #                à chaque exécution du pipeline (gain de temps ~1-2 min)
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -23,18 +67,107 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: Build and Test with Maven
+      # ── Étape 3 : Compilation Maven ──────────────────────────────────
+      # "clean package" : nettoie le build précédent et génère le JAR
+      # -DskipTests : pas de tests ici (à ajouter dans une étape dédiée)
+      - name: Build with Maven
         run: mvn clean package -DskipTests
 
+      # ── Étape 4 : Connexion à Docker Hub ────────────────────────────
+      # Utilise les secrets GitHub pour s'authentifier de façon sécurisée
+      # (les secrets ne sont jamais visibles dans les logs)
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
+      # ── Étape 5 : Build et push de l'image Docker ───────────────────
+      # Lit le Dockerfile à la racine du projet pour construire l'image
+      # push: true seulement sur "push" (évite de pousser sur une PR)
+      # L'image sera disponible sur : palaye769/tennis-backend:latest
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: true
+          push: ${{ github.event_name == 'push' }}
           tags: palaye769/tennis-backend:latest
+
+  # ════════════════════════════════════════════════════════════════════
+  # JOB 2 — CD : Déploiement Continu sur EC2
+  #
+  # Déclenché sur : push master UNIQUEMENT (pas sur les pull_request)
+  # Dépend de     : job "ci" → attend que l'image soit sur Docker Hub
+  #
+  # PROTOCOLE DE DÉPLOIEMENT (géré ici, pas dans user_data.sh.tpl) :
+  #   user_data.sh.tpl gère le 1er boot (installation Docker, création
+  #   du docker-compose.yml). Ce job gère TOUTES les mises à jour suivantes.
+  #
+  #   1. SSH sur l'EC2 via la clé privée stockée dans les secrets GitHub
+  #   2. docker-compose pull backend  → télécharge la nouvelle image
+  #   3. docker-compose up -d         → recrée le conteneur backend
+  #      (MySQL n'est pas redémarré, ses données sont préservées)
+  #   4. Vérification que les conteneurs sont bien démarrés
+  # ════════════════════════════════════════════════════════════════════
+  cd:
+    name: "CD — Deploy to EC2"
+    runs-on: ubuntu-latest
+
+    # Ce job ne démarre qu'après la réussite du job "ci"
+    needs: ci
+
+    # Condition : exécuter UNIQUEMENT sur un push vers master
+    # (les pull_request ne déclenchent pas le déploiement)
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+
+    steps:
+
+      # ── Étape 1 : Connexion SSH et déploiement ──────────────────────
+      # appleboy/ssh-action ouvre une session SSH vers l'EC2 et exécute
+      # le script de déploiement directement sur le serveur distant.
+      #
+      # EC2_HOST    → IP publique de l'EC2 (ex: 54.215.12.34)
+      #               Obtenir avec : terraform output ec2_public_ip
+      # EC2_SSH_KEY → Contenu complet de ~/.ssh/id_rsa (votre clé privée)
+      #               Copier tout le fichier dans le secret, y compris
+      #               les lignes "-----BEGIN RSA PRIVATE KEY-----" etc.
+      - name: Deploy new Docker image on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          connect_timeout: 30s
+          script: |
+            set -e  # arrête le script immédiatement si une commande échoue
+
+            echo "================================================"
+            echo " [CD] DÉPLOIEMENT DÉMARRÉ : $(date)"
+            echo "================================================"
+
+            # Se placer dans le répertoire créé par user_data.sh.tpl
+            # lors du premier démarrage de l'instance EC2
+            cd /opt/tennis-app
+
+            # ── 1. Télécharger la nouvelle image du backend ──────────
+            # Pull uniquement l'image "backend" (palaye769/tennis-backend:latest)
+            # L'image MySQL n'est pas retéléchargée (aucun changement)
+            echo "[1/3] Pull de la nouvelle image Docker..."
+            docker-compose pull backend
+
+            # ── 2. Redémarrer le conteneur backend ───────────────────
+            # "up -d" recrée le conteneur backend avec la nouvelle image
+            # "--no-deps" évite de redémarrer MySQL et de perdre des connexions
+            # Le volume mysql_data est préservé (données non effacées)
+            echo "[2/3] Redémarrage du conteneur backend..."
+            docker-compose up -d --no-deps backend
+
+            # ── 3. Vérification de l'état des conteneurs ─────────────
+            # Affiche l'état de tous les conteneurs pour confirmer
+            # que mysql et backend sont bien "Up"
+            echo "[3/3] Vérification des conteneurs :"
+            docker-compose ps
+
+            echo "================================================"
+            echo " [CD] DÉPLOIEMENT TERMINÉ : $(date)"
+            echo "================================================"

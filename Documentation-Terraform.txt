@@ -1,0 +1,622 @@
+================================================================
+   GUIDE COMPLET — DÉPLOIEMENT TERRAFORM SUR AWS EC2
+   Application : Tennis Backend (Spring Boot + MySQL)
+   Région      : af-south-1 (Le Cap, Afrique du Sud)
+   Niveau      : Débutant Terraform / Linux
+================================================================
+
+SOMMAIRE
+--------
+a. Installation de Terraform et AWS CLI sous Linux
+b. Configuration des credentials AWS (aws configure)
+c. Création d'une paire de clés SSH pour se connecter à l'EC2
+d. Remplir le fichier de variables (terraform.tfvars)
+e. Initialisation : terraform init
+f. Vérification : terraform plan
+g. Application : terraform apply
+h. Récupérer l'IP publique et tester le Swagger
+i. Se connecter en SSH à l'instance pour debug
+j. Mettre à jour le conteneur après un nouveau push Docker Hub
+k. Détruire l'infrastructure : terraform destroy
+l. Liste des fichiers créés et rôle de chacun
+
+
+================================================================
+a. INSTALLATION DE TERRAFORM ET AWS CLI SOUS LINUX
+================================================================
+
+TERRAFORM (méthode officielle HashiCorp — Ubuntu/Debian/Linux Mint)
+--------------------------------------------------------------------
+
+1. Ajout du dépôt HashiCorp et installation :
+
+   sudo apt-get update && sudo apt-get install -y gnupg software-properties-common
+
+   wget -O- https://apt.releases.hashicorp.com/gpg | \
+     gpg --dearmor | \
+     sudo tee /usr/share/keyrings/hashicorp-archive-keyring.gpg > /dev/null
+
+   echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] \
+     https://apt.releases.hashicorp.com $(lsb_release -cs) main" | \
+     sudo tee /etc/apt/sources.list.d/hashicorp.list
+
+   sudo apt update && sudo apt-get install terraform
+
+2. Vérification de l'installation :
+
+   terraform -version
+
+   Résultat attendu (exemple) : Terraform v1.8.x
+
+AWS CLI (v2 — méthode officielle)
+-----------------------------------
+
+3. Téléchargement et installation :
+
+   curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+   unzip awscliv2.zip
+   sudo ./aws/install
+
+4. Vérification :
+
+   aws --version
+
+   Résultat attendu (exemple) : aws-cli/2.x.x Python/3.x.x Linux/x86_64
+
+
+================================================================
+b. CONFIGURATION DES CREDENTIALS AWS
+================================================================
+
+ÉTAPE 1 — Créer une Access Key dans la console AWS
+----------------------------------------------------
+
+1. Connectez-vous sur : https://console.aws.amazon.com
+2. Cliquez en haut à droite sur votre nom de compte → "Security credentials"
+3. Faites défiler jusqu'à "Access keys" → "Create access key"
+4. Choisissez "Command Line Interface (CLI)" → Cochez la case → "Next"
+5. Description (optionnel) : "terraform-deploy"
+6. Cliquez "Create access key"
+7. IMPORTANT : Notez ou téléchargez les deux valeurs :
+   - Access Key ID     → ressemble à : AKIAIOSFODNN7EXAMPLE
+   - Secret Access Key → ressemble à : wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+   ⚠️  Le Secret Access Key ne s'affiche qu'une seule fois.
+
+ÉTAPE 2 — Configurer AWS CLI sur votre machine Linux
+-----------------------------------------------------
+
+   aws configure
+
+   AWS Access Key ID [None]: (collez votre Access Key ID)
+   AWS Secret Access Key [None]: (collez votre Secret Access Key)
+   Default region name [None]: af-south-1
+   Default output format [None]: json
+
+   Test de connexion :
+
+   aws sts get-caller-identity
+
+   Résultat attendu :
+   {
+     "UserId": "...",
+     "Account": "163389715222",
+     "Arn": "arn:aws:iam::163389715222:user/..."
+   }
+
+   Si vous voyez votre Account ID, la configuration est correcte.
+
+
+================================================================
+c. CRÉATION D'UNE PAIRE DE CLÉS SSH
+================================================================
+
+Terraform va importer VOTRE clé publique dans AWS pour que vous
+puissiez ensuite vous connecter à l'EC2 avec votre clé privée.
+
+ÉTAPE 1 — Vérifier si vous avez déjà une clé SSH
+--------------------------------------------------
+
+   ls ~/.ssh/
+
+   Si vous voyez id_rsa et id_rsa.pub → vous avez déjà une clé,
+   passez directement à l'étape "d. Remplir terraform.tfvars".
+
+ÉTAPE 2 — Créer une nouvelle clé SSH (si vous n'en avez pas)
+-------------------------------------------------------------
+
+   ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa
+
+   Quand le programme demande une passphrase : appuyez sur Entrée
+   deux fois pour ne pas mettre de mot de passe (plus simple pour
+   commencer, vous pourrez en ajouter un plus tard).
+
+   Résultat : deux fichiers créés :
+   - ~/.ssh/id_rsa      → clé PRIVÉE (ne jamais partager)
+   - ~/.ssh/id_rsa.pub  → clé PUBLIQUE (celle importée dans AWS)
+
+ÉTAPE 3 — Vérifier le contenu de la clé publique
+-------------------------------------------------
+
+   cat ~/.ssh/id_rsa.pub
+
+   Résultat (exemple) :
+   ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQ... abdoulaye@machine
+
+   C'est cette clé que Terraform va importer dans AWS sous le
+   nom "palaye-tennis-key".
+
+
+================================================================
+d. REMPLIR LE FICHIER DE VARIABLES (terraform.tfvars)
+================================================================
+
+ÉTAPE 1 — Copier le fichier exemple
+------------------------------------
+
+   cd /chemin/vers/projet-tennis/terraform
+
+   cp terraform.tfvars.example terraform.tfvars
+
+ÉTAPE 2 — Trouver votre IP publique actuelle
+---------------------------------------------
+
+   curl ifconfig.me
+
+   Exemple de résultat : 41.82.100.45
+   → Dans terraform.tfvars, mettez : ssh_allowed_ip = "41.82.100.45/32"
+   (ajoutez bien /32 à la fin — c'est le format CIDR pour une IP unique)
+
+   ⚠️  Si votre IP change (connexion 4G/Fibre qui change), vous devrez
+   mettre à jour cette valeur et refaire "terraform apply".
+
+ÉTAPE 3 — Ouvrir et éditer terraform.tfvars
+---------------------------------------------
+
+   nano terraform.tfvars
+
+   Valeurs à remplir obligatoirement :
+   ┌─────────────────────────────────────────────────────────────┐
+   │ ssh_allowed_ip     = "VOTRE_IP_PUBLIQUE/32"                 │
+   │                      (remplacez VOTRE_IP_PUBLIQUE par le    │
+   │                       résultat de "curl ifconfig.me")       │
+   │                                                             │
+   │ mysql_root_password = "VotreMotDePasseFor!2024"             │
+   │                       (choisissez un vrai mot de passe fort)│
+   └─────────────────────────────────────────────────────────────┘
+
+   Les autres valeurs ont déjà des valeurs par défaut correctes.
+
+   Enregistrez avec : Ctrl+O puis Entrée, quittez avec Ctrl+X
+
+
+================================================================
+e. INITIALISATION : terraform init
+================================================================
+
+   cd /chemin/vers/projet-tennis/terraform
+
+   terraform init
+
+Cette commande télécharge le "provider" AWS (le plugin qui permet
+à Terraform de communiquer avec AWS). C'est comme un "npm install"
+ou "mvn install" — à faire une seule fois ou après ajout d'un nouveau
+provider.
+
+Résultat attendu :
+   Initializing the backend...
+   Initializing provider plugins...
+   - Installing hashicorp/aws v5.x.x...
+   - Installed hashicorp/aws v5.x.x (signed by HashiCorp)
+
+   Terraform has been successfully initialized!
+
+Un dossier .terraform/ est créé — c'est normal, il contient le provider
+téléchargé. Il est dans le .gitignore, ne le commitez pas.
+
+
+================================================================
+f. VÉRIFICATION : terraform plan
+================================================================
+
+   terraform plan
+
+Cette commande simule ce que Terraform va faire SANS rien modifier
+sur AWS. C'est un aperçu de toutes les ressources qui seront créées,
+modifiées ou supprimées.
+
+Résultat attendu (résumé) :
+   Terraform will perform the following actions:
+
+   + aws_key_pair.tennis_key         (créer la paire de clés)
+   + aws_security_group.tennis_sg    (créer le security group)
+   + aws_instance.tennis_backend     (créer l'instance EC2)
+
+   Plan: 3 to add, 0 to change, 0 to destroy.
+
+Si vous voyez des erreurs (ex: "Error: No valid credential sources found"),
+revenez à l'étape b et reconfigurez aws configure.
+
+⚠️  Si vous voyez "Error reading file: no such file" pour la clé SSH,
+vérifiez que ~/.ssh/id_rsa.pub existe (étape c).
+
+
+================================================================
+g. APPLICATION : terraform apply
+================================================================
+
+   terraform apply
+
+Terraform réaffiche le plan, puis demande confirmation :
+
+   Do you want to perform these actions?
+     Terraform will perform the actions described above.
+     Only 'yes' will be accepted to approve.
+
+   Enter a value: yes   ← tapez "yes" et appuyez sur Entrée
+
+Terraform crée ensuite les ressources dans cet ordre :
+1. La paire de clés SSH (importée depuis votre ~/.ssh/id_rsa.pub)
+2. Le Security Group (pare-feu)
+3. L'instance EC2 (avec le script user_data qui installe Docker)
+
+Résultat final (exemple) :
+   Apply complete! Resources: 3 added, 0 changed, 0 destroyed.
+
+   Outputs:
+
+   ec2_public_ip = "13.245.xxx.xxx"
+   ec2_public_dns = "ec2-13-245-xxx-xxx.af-south-1.compute.amazonaws.com"
+   swagger_url = "http://13.245.xxx.xxx:8081/swagger-ui/index.html#/"
+   ssh_command = "ssh -i ~/.ssh/id_rsa ec2-user@13.245.xxx.xxx"
+   instance_id = "i-0xxxxxxxxxxxxxxxx"
+
+IMPORTANT : Après "terraform apply", l'instance EC2 démarre et
+exécute automatiquement le script d'installation. Ce script :
+  - Met à jour le système (dnf update)
+  - Installe Docker
+  - Installe Docker Compose
+  - Lance MySQL + le backend via docker-compose up
+
+⏳ Attendez 2 à 3 minutes avant de tester l'URL Swagger.
+   Le démarrage de MySQL + Spring Boot prend du temps.
+
+Pour revoir les outputs à tout moment :
+   terraform output
+
+
+================================================================
+h. RÉCUPÉRER L'IP PUBLIQUE ET TESTER LE SWAGGER
+================================================================
+
+ÉTAPE 1 — Récupérer l'IP publique
+-----------------------------------
+
+   terraform output ec2_public_ip
+
+   → Exemple : 13.245.xxx.xxx
+
+ÉTAPE 2 — Tester l'accès au Swagger
+-------------------------------------
+
+Ouvrez votre navigateur et accédez à :
+
+   http://VOTRE_IP_EC2:8081/swagger-ui/index.html#/
+
+   Exemple complet :
+   http://13.245.xxx.xxx:8081/swagger-ui/index.html#/
+
+⏳ Si vous obtenez "Connection refused" ou la page ne charge pas :
+   Attendez encore 1-2 minutes (Spring Boot prend ~90s à démarrer)
+   et réessayez.
+
+ÉTAPE 3 — Vérification rapide via curl (optionnel)
+---------------------------------------------------
+
+   curl http://VOTRE_IP_EC2:8081/api-docs
+
+   Si Spring Boot tourne, vous recevrez le JSON de l'API OpenAPI.
+
+REMARQUE IMPORTANTE SUR L'IP PUBLIQUE
+--------------------------------------
+L'IP publique de votre EC2 est dynamique : elle change à chaque
+arrêt/redémarrage de l'instance (depuis la console AWS).
+Si vous redémarrez l'instance, récupérez la nouvelle IP avec :
+
+   terraform refresh
+   terraform output ec2_public_ip
+
+Ou directement dans la console AWS → EC2 → Instances.
+
+
+================================================================
+i. SE CONNECTER EN SSH À L'INSTANCE POUR DEBUG
+================================================================
+
+CONNEXION SSH
+--------------
+
+   ssh -i ~/.ssh/id_rsa ec2-user@VOTRE_IP_EC2
+
+   Ou utilisez la commande affichée par Terraform :
+   terraform output ssh_command | bash   # copier-coller et exécuter
+
+   ⚠️  L'utilisateur SSH sur Amazon Linux est "ec2-user" (pas "ubuntu",
+   pas "root", pas votre prénom).
+
+COMMANDES UTILES UNE FOIS CONNECTÉ
+------------------------------------
+
+1. Voir les logs d'installation (script user_data) :
+   sudo cat /var/log/tennis-setup.log
+
+2. Voir les conteneurs Docker en cours d'exécution :
+   sudo docker ps
+
+3. Voir les logs du backend Spring Boot :
+   sudo docker logs tennis-backend
+
+4. Voir les logs de MySQL :
+   sudo docker logs tennis-mysql
+
+5. Voir les logs en temps réel (Ctrl+C pour arrêter) :
+   sudo docker logs -f tennis-backend
+
+6. Vérifier l'état du service systemd :
+   sudo systemctl status tennis-app
+
+7. Voir le fichier docker-compose.yml généré :
+   cat /opt/tennis-app/docker-compose.yml
+
+SI L'APPLICATION NE DÉMARRE PAS
+---------------------------------
+
+Cause fréquente 1 — MySQL pas encore prêt :
+   sudo docker ps
+   → Vérifiez que tennis-mysql est "healthy" (peut prendre 1-2 min)
+
+Cause fréquente 2 — Erreur Spring Boot :
+   sudo docker logs tennis-backend
+   → Cherchez les lignes "ERROR" ou "Exception"
+
+Cause fréquente 3 — Installation incomplète (user_data encore en cours) :
+   sudo cat /var/log/tennis-setup.log
+   → Attendez la ligne "INSTALLATION TERMINÉE"
+
+Redémarrer manuellement les conteneurs :
+   cd /opt/tennis-app
+   sudo docker-compose down
+   sudo docker-compose up -d
+
+
+================================================================
+j. METTRE À JOUR LE CONTENEUR APRÈS UN NOUVEAU PUSH DOCKER HUB
+================================================================
+
+CONTEXTE
+---------
+Votre pipeline GitHub Actions push une nouvelle image sur Docker Hub
+(palaye769/tennis-backend:latest) à chaque push sur la branche master.
+Mais l'EC2 ne se met pas à jour automatiquement — il faut lui demander
+de récupérer la nouvelle image.
+
+MÉTHODE : Mise à jour manuelle via SSH
+----------------------------------------
+
+1. Connectez-vous à l'EC2 :
+   ssh -i ~/.ssh/id_rsa ec2-user@VOTRE_IP_EC2
+
+2. Une fois connecté, exécutez ces commandes :
+   cd /opt/tennis-app
+   sudo docker-compose pull backend
+   sudo docker-compose up -d --no-deps backend
+
+   Explication de chaque commande :
+   - "docker-compose pull backend"         → télécharge la nouvelle image
+   - "docker-compose up -d --no-deps backend" → recrée uniquement le
+     conteneur backend (sans toucher à MySQL)
+
+3. Vérifiez que la mise à jour s'est bien passée :
+   sudo docker logs tennis-backend
+   sudo docker ps
+
+SCRIPT DE MISE À JOUR AUTOMATISÉE (optionnel, usage futur)
+------------------------------------------------------------
+Vous pouvez créer un script update.sh sur votre machine locale :
+
+   #!/bin/bash
+   # update-tennis.sh — Mise à jour du backend sur EC2
+   EC2_IP="VOTRE_IP_EC2"
+   SSH_KEY="$HOME/.ssh/id_rsa"
+
+   echo "Connexion à l'EC2 $EC2_IP pour mise à jour..."
+   ssh -i $SSH_KEY ec2-user@$EC2_IP << 'EOF'
+     cd /opt/tennis-app
+     sudo docker-compose pull backend
+     sudo docker-compose up -d --no-deps backend
+     echo "Mise à jour terminée !"
+     sudo docker ps
+   EOF
+
+Rendez-le exécutable :
+   chmod +x update-tennis.sh
+
+Lancez la mise à jour :
+   ./update-tennis.sh
+
+AUTOMATISATION AVANCÉE (pour plus tard)
+-----------------------------------------
+Si vous voulez automatiser entièrement la mise à jour depuis GitHub
+Actions, vous pourrez ajouter une étape dans votre workflow CI/CD qui :
+1. Se connecte en SSH à l'EC2 (via un secret GitHub = votre clé privée)
+2. Exécute le "docker-compose pull + up" sur l'EC2
+
+Bibliothèque GitHub Actions pour cela : appleboy/ssh-action
+
+
+================================================================
+k. DÉTRUIRE L'INFRASTRUCTURE : terraform destroy
+================================================================
+
+Quand vous voulez supprimer TOUTES les ressources AWS créées par
+Terraform (EC2, Security Group, Key Pair) pour éviter des frais :
+
+   cd /chemin/vers/projet-tennis/terraform
+
+   terraform destroy
+
+Terraform vous demande confirmation :
+
+   Do you really want to destroy all resources?
+     Terraform will destroy all your managed infrastructure.
+     There is no undo. Only 'yes' will be accepted to confirm.
+
+   Enter a value: yes   ← tapez "yes" et Entrée
+
+IMPORTANT : "terraform destroy" supprime DÉFINITIVEMENT :
+- L'instance EC2 (et toutes ses données, dont les données MySQL)
+- Le Security Group
+- La paire de clés SSH dans AWS (pas votre clé locale ~/.ssh/id_rsa)
+
+Si vous voulez juste arrêter l'instance (sans la supprimer) pour
+économiser de l'argent tout en gardant vos données, utilisez la
+console AWS → EC2 → Instance → Actions → Stop.
+
+⚠️  Une instance arrêtée (stopped) via la console AWS ne facture pas
+le CPU, mais peut facturer le stockage EBS. Sur Free Tier, vous avez
+30 Go d'EBS gratuit, donc une instance t3.micro avec 8 Go (défaut)
+reste dans les limites gratuites.
+
+
+================================================================
+l. LISTE DES FICHIERS CRÉÉS ET RÔLE DE CHACUN
+================================================================
+
+DOSSIER terraform/ (infrastructure as code)
+--------------------------------------------
+
+┌─────────────────────────────┬────────────────────────────────────────────────┐
+│ Fichier                     │ Rôle                                           │
+├─────────────────────────────┼────────────────────────────────────────────────┤
+│ provider.tf                 │ Déclare le provider AWS et la version de        │
+│                             │ Terraform requise. Point d'entrée obligatoire.  │
+├─────────────────────────────┼────────────────────────────────────────────────┤
+│ variables.tf                │ Déclare toutes les variables utilisées dans     │
+│                             │ l'infrastructure (région, port, image, IP...).  │
+│                             │ Définit les types, descriptions et valeurs par  │
+│                             │ défaut. Ne contient PAS les valeurs réelles.    │
+├─────────────────────────────┼────────────────────────────────────────────────┤
+│ main.tf                     │ Le cœur de l'infrastructure. Définit les 3      │
+│                             │ ressources AWS : AMI (data source), paire de    │
+│                             │ clés SSH, Security Group, instance EC2.         │
+│                             │ Référence user_data.sh.tpl pour le script de    │
+│                             │ démarrage.                                      │
+├─────────────────────────────┼────────────────────────────────────────────────┤
+│ outputs.tf                  │ Déclare les valeurs affichées après             │
+│                             │ "terraform apply" : IP publique, DNS, URL       │
+│                             │ Swagger, commande SSH.                          │
+├─────────────────────────────┼────────────────────────────────────────────────┤
+│ user_data.sh.tpl            │ Script Bash (template) exécuté automatiquement  │
+│                             │ au premier démarrage de l'EC2. Installe Docker, │
+│                             │ Docker Compose, génère le docker-compose.yml    │
+│                             │ avec vos variables, crée un service systemd et  │
+│                             │ lance les conteneurs MySQL + backend.           │
+├─────────────────────────────┼────────────────────────────────────────────────┤
+│ terraform.tfvars.example    │ Exemple de fichier de variables à compléter.    │
+│                             │ À copier en terraform.tfvars et à remplir.      │
+│                             │ Ce fichier exemple EST dans git (pas de secret).│
+├─────────────────────────────┼────────────────────────────────────────────────┤
+│ terraform.tfvars            │ VOS vraies valeurs (IP, mot de passe...).       │
+│ (à créer vous-même)         │ ⚠️  JAMAIS committer dans git — dans .gitignore │
+├─────────────────────────────┼────────────────────────────────────────────────┤
+│ .terraform/                 │ Créé par "terraform init". Contient le provider │
+│ (généré automatiquement)    │ AWS téléchargé. Dans .gitignore.               │
+├─────────────────────────────┼────────────────────────────────────────────────┤
+│ terraform.tfstate           │ État de l'infrastructure (créé par "apply").    │
+│ (généré automatiquement)    │ Terraform s'en sert pour savoir ce qui existe   │
+│                             │ déjà sur AWS. ⚠️  Dans .gitignore (peut         │
+│                             │ contenir des secrets).                          │
+└─────────────────────────────┴────────────────────────────────────────────────┘
+
+FICHIER À LA RACINE DU PROJET
+-------------------------------
+
+┌─────────────────────────────┬────────────────────────────────────────────────┐
+│ Documentation-Terraform.txt │ Ce fichier — guide complet en français pour    │
+│                             │ déployer et gérer l'infrastructure.             │
+└─────────────────────────────┴────────────────────────────────────────────────┘
+
+ARCHITECTURE SUR AWS (après "terraform apply")
+-----------------------------------------------
+
+   Internet
+      │
+      ▼
+   Security Group (tennis-backend-sg)
+   ├── Port 22  ←── Votre IP uniquement (SSH)
+   └── Port 8081 ←── Tout le monde (API + Swagger)
+      │
+      ▼
+   EC2 t3.micro — Amazon Linux 2023 (af-south-1)
+   ├── Docker Compose
+   │   ├── tennis-mysql (MySQL 8.0, réseau interne)
+   │   └── tennis-backend (palaye769/tennis-backend:latest, port 8081)
+   └── Systemd service tennis-app (redémarre au reboot)
+
+
+================================================================
+RÉCAPITULATIF DES COMMANDES — WORKFLOW COMPLET
+================================================================
+
+# Installation (une seule fois)
+sudo apt install terraform
+aws configure
+
+# Clé SSH (une seule fois si pas encore créée)
+ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa
+
+# Préparer les variables
+cd projet-tennis/terraform
+cp terraform.tfvars.example terraform.tfvars
+nano terraform.tfvars          # remplir ssh_allowed_ip et mysql_root_password
+
+# Déployer
+terraform init
+terraform plan
+terraform apply
+
+# Afficher les infos de connexion
+terraform output
+
+# Mettre à jour après un push Docker Hub
+ssh -i ~/.ssh/id_rsa ec2-user@VOTRE_IP_EC2
+  → cd /opt/tennis-app
+  → sudo docker-compose pull backend
+  → sudo docker-compose up -d --no-deps backend
+
+# Supprimer toute l'infrastructure
+terraform destroy
+
+
+================================================================
+COÛTS ET FREE TIER
+================================================================
+
+En tant que nouveau compte AWS (moins de 12 mois), vous bénéficiez
+du Free Tier pour :
+
+- EC2 t3.micro : 750 heures/mois (soit ~31 jours en continu)
+- EBS (disque) : 30 Go/mois
+- Transfert sortant : 100 Go/mois
+
+⚠️  Depuis février 2024, AWS facture les adresses IPv4 publiques :
+$0.005/heure soit ~$3.60/mois pour une IP publique continue.
+Pour éviter ce coût : stoppez l'instance quand vous ne l'utilisez pas
+(console AWS → EC2 → Stop instance).
+
+La région af-south-1 (Le Cap) n'est PAS dans la région "US East" qui
+est le cœur du Free Tier. Vérifiez votre tableau de bord AWS Billing
+pour surveiller les coûts.
+
+================================================================
+FIN DU GUIDE
+================================================================
