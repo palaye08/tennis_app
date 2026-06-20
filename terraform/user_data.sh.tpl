@@ -5,17 +5,7 @@
 # RÔLE : Ce script s'exécute UNE SEULE FOIS, au premier démarrage de
 #         l'instance EC2 créée par Terraform.
 #
-# CE QU'IL FAIT (infrastructure uniquement) :
-#   1. Met à jour le système (dnf)
-#   2. Installe Docker et Docker Compose
-#   3. Crée /opt/tennis-app/docker-compose.yml (MySQL + backend)
-#   4. Crée le service systemd (redémarrage automatique au reboot)
-#   5. Premier démarrage des conteneurs
-#
-# CE QU'IL NE FAIT PAS (géré par .github/workflows/ci-cd.yml) :
-#   → Les mises à jour de l'image Docker backend après le 1er boot
-#     sont déclenchées par le pipeline CI/CD à chaque push sur master
-#     via SSH : docker-compose pull backend && docker-compose up -d
+
 # ══════════════════════════════════════════════════════════════════════
 set -e
 exec > /var/log/tennis-setup.log 2>&1
